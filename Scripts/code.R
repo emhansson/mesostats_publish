@@ -1,28 +1,42 @@
-# EM HANSSON April 2022
+# EM HANSSON June 2022
 
 # Load libraries
-library(tidyverse)
+library(dplyr)
 library(ggplot2)
 library(lme4)
 library(car)
 library(arm)
 library(pbkrtest)
+library(emmeans)
 
 # Data import
-df <- read_csv("Data/df.csv") 
+df <- read_csv("Data/df.csv") # control data
 
-df_mod <- df %>%
+df_mod_expcomp <- df %>% # For experiment comparison
   mutate(exp_day2 = exp_day - mean(exp_day)) %>% # Center day variable for model fit
   filter(exp_day > 7) %>% # Remove establishment phase for better fit
   filter(!(test == "D" & chamber == "13")) %>% # Remove chamber with leak
   filter(exp_day < 51)  # Remove post-contamination phase
 
+df2 <- read_csv("Data/df2.csv") # clumping data
+
+df3 <- read_csv("Data/df3.csv") # glyphosate pilot
+
+df_mod_glyphosate <- df3 %>% # For population decline slope estimation
+  filter(exp_day >= 6 & exp_day <= 16) %>% 
+  mutate(chamber = as.factor(chamber),
+         treatment_group = as.factor(treatment_group),
+         log.cell_count = log(cell_count),
+         dayID = factor(exp_day))
+
+
 # Models
+### Experiment comparison
 ## Straight line through data, exp_day just a random effect, no effect of rpm or of test
-mod_rpm <- lmer(log(cell_count) ~ rpm + ( 1 | chamberID) + (1 | exp_day2), data = df_mod, 
+mod_rpm <- lmer(log(cell_count) ~ rpm + ( 1 | chamberID) + (1 | exp_day2), data = df_mod_expcomp, 
                     control = lmerControl(optimizer="Nelder_Mead"))
 
-mod_test <- lmer(log(cell_count) ~ test + ( 1 | chamberID) + (1 | exp_day2), data = df_mod, 
+mod_test <- lmer(log(cell_count) ~ test + ( 1 | chamberID) + (1 | exp_day2), data = df_mod_expcomp, 
                              control = lmerControl(optimizer="Nelder_Mead"))
 
 # Summaries and residuals
@@ -43,6 +57,26 @@ PBmodcomp(mod_rpm, mod_red, nsim = 1000)
 
 anova(mod_test, mod_red)
 PBmodcomp(mod_test, mod_red, nsim = 1000)
+
+### Population decline slope in glyphosate pilot
+mod_glyphosate <- lmer(log.cell_count ~ treatment_group*exp_day + (1 | dayID) + (1 | chamber), data = df_mod_glyphosate)
+summary(mod_glyphosate)
+Anova(mod_glyphosate)
+plot(mod_glyphosate)
+
+emtrends(mod_glyphosate, pairwise ~ treatment_group, var = "exp_day")
+
+# Extracting and plotting the slopes with 95% confidence intervals using emmeans::emtrends, unsure if this is the smartest way to do it but at least avoids having to extract coefficients myself
+glyphosate_trends <- as.data.frame(emtrends(mod_glyphosate, pairwise ~ treatment_group, var = "exp_day")) %>%
+  filter(treatment_group != ".")
+
+ggplot(glyphosate_trends, aes(x = treatment_group, y = exp_day.trend, ymax = upper.CL, ymin = lower.CL)) +
+  geom_point() +
+  geom_errorbar() +
+  ggtitle("Death slopes with 95% CI")
+
+glyphosate_trends %>%
+  dplyr::select(treatment_group, exp_day.trend, SE)
 
 # Plots included in chapter
 
@@ -71,6 +105,22 @@ ggplot(df %>% mutate(mean_cell_count = cell_count)  %>% filter(!(test == "D" & c
   theme_bw() +
   guides(color = guide_legend(override.aes = list(fill = NA)),
          linetype = guide_legend(override.aes = list(fill = NA)))
+
+# Glyphosate pilot
+df_glyphosate_sum <- df3 %>%
+  group_by(chamber, treatment_group, exp_day) %>%
+  dplyr::summarise(
+    mean.cell_count = mean(cell_count),
+    se = (sd(cell_count)/sqrt(n())))
+
+ggplot(df_glyphosate_sum, aes(x = exp_day, y = log(mean.cell_count), colour = factor(treatment_group), groups = factor(chamber))) +
+  geom_vline(aes(xintercept = -0.5)) +
+  geom_smooth(aes(ymin = log(mean.cell_count - se), ymax = log(mean.cell_count + se)), stat = "identity") +
+  geom_point(data = df3 %>% mutate(mean.cell_count = cell_count), alpha = 0.3) +
+  theme_bw() +
+  scale_x_continuous(limits = c(-2, 24), labels = seq(-2, 24, 2), breaks = seq(-2, 24, 2), name = "Days since glyphosate treatment") +
+  scale_y_continuous(name = "Population density log(cells/ml)") +
+  guides(color = guide_legend(override.aes = list(fill = NA)))
 
 
 # Leak
@@ -124,3 +174,22 @@ ggplot(df_contamination %>% mutate(mean_cell_count = cell_count), aes(x = exp_da
   geom_segment(aes(x = 62, xend = 62, y = 13.5, yend = 14.1), arrow = arrow(length = unit(0.5, "cm")), size = 0.5, colour = "grey50", show.legend = FALSE) +
   annotate("text", x = 62, y = 13.40, label = "Contamination detected", size = 8, colour = "grey35") +
   guides(color = guide_legend(override.aes = list(fill = NA)))
+
+
+# Clumping
+df_clumping_sum <- df2 %>%
+  group_by(chamber, exp_day, clumping) %>%
+  summarise(
+    mean = mean(cell_count),
+    se = sd(cell_count)/sqrt(n())
+  )
+
+df2 %>%
+  ggplot(aes(x = exp_day, y = log(cell_count), colour = clumping, linetype = clumping, groups = factor(chamber))) +
+  geom_point() +
+  geom_smooth(data = df_clumping_sum %>% mutate(cell_count = mean), aes(ymin = log(mean - se), ymax = log(mean + se)), stat = "identity") +
+  theme_bw() +
+  scale_x_continuous(labels = seq(42, 62, 2), breaks = seq(42, 62, 2), name = "Days since inoculation") +
+  scale_y_continuous(name = "Population density log(cells/ml)", limits = c(13.2, 15.5)) +
+  guides(color = guide_legend(override.aes = list(fill = NA)))
+
