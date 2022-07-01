@@ -1,7 +1,7 @@
 # EM HANSSON June 2022
 
 # Load libraries
-library(dplyr)
+library(tidyverse)
 library(ggplot2)
 library(lme4)
 library(car)
@@ -20,15 +20,14 @@ df_mod_expcomp <- df %>% # For experiment comparison
 
 df2 <- read_csv("Data/df2.csv") # clumping data
 
-df3 <- read_csv("Data/df3.csv") # glyphosate pilot
+df3 <- read_csv("Data/df3.csv") # glyphosate pilot, note day 22 excluded for glyphosate treated lines due to equipment failure
 
 df_mod_glyphosate <- df3 %>% # For population decline slope estimation
   filter(exp_day >= 6 & exp_day <= 16) %>% 
   mutate(chamber = as.factor(chamber),
          treatment_group = as.factor(treatment_group),
          log.cell_count = log(cell_count),
-         dayID = factor(exp_day))
-
+         dayID = factor(exp_day)) 
 
 # Models
 ### Experiment comparison
@@ -113,17 +112,22 @@ df_glyphosate_sum <- df3 %>%
     mean.cell_count = mean(cell_count),
     se = (sd(cell_count)/sqrt(n())))
 
-ggplot(df_glyphosate_sum, aes(x = exp_day, y = log(mean.cell_count), colour = factor(treatment_group), groups = factor(chamber))) +
+df_glyphosate_model <- df3 %>%
+  filter(exp_day >= 6, exp_day <= 16)
+
+ggplot(df_glyphosate_sum, aes(x = exp_day, y = log(mean.cell_count), colour = factor(treatment_group), fill = factor(treatment_group), groups = factor(chamber))) +
   geom_vline(aes(xintercept = -0.5)) +
-  geom_smooth(aes(ymin = log(mean.cell_count - se), ymax = log(mean.cell_count + se)), stat = "identity") +
-  geom_point(data = df3 %>% mutate(mean.cell_count = cell_count), alpha = 0.3) +
-  theme_bw() +
+  geom_line(size = 1) +
+  geom_ribbon(aes(ymin = log(mean.cell_count - se), ymax = log(mean.cell_count + se)), stat = "identity", alpha = 0.3, size = 0) +
+  geom_smooth(data = df_glyphosate_model %>% mutate(mean.cell_count = cell_count), aes(group = treatment_group), method = lm, colour = "black", size = 2, se = FALSE, show.legend = FALSE) +
+  geom_point(data = df3 %>% mutate(mean.cell_count = cell_count), alpha = 0.3) +  theme_bw() +
   scale_x_continuous(limits = c(-2, 24), labels = seq(-2, 24, 2), breaks = seq(-2, 24, 2), name = "Days since glyphosate treatment") +
   scale_y_continuous(name = "Population density log(cells/ml)") +
   guides(color = guide_legend(override.aes = list(fill = NA)))
 
 
 # Leak
+# Select chambers of interest
 df_leak <- df %>%
   filter(test == "D") %>%
   filter(chamber == "4" | chamber == "6" | chamber == "8" | chamber == "9" | chamber == "10" | chamber == "13")
@@ -146,6 +150,7 @@ ggplot(df_leak %>% mutate(mean_cell_count = cell_count), aes(x = exp_day, y = lo
   guides(color = guide_legend(override.aes = list(fill = NA)))
 
 # Contamination
+# Select chambers of interest and add column for contamination
 df_contamination <- df %>%
   filter(test == "D") %>%
   filter(chamber == "4" | chamber == "6" | chamber == "8" | chamber == "9" | chamber == "10" | chamber == "13") %>%
